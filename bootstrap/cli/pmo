@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+"""
+pmo — Area E operator CLI (one-window substrate).
+
+Subcommands:
+  up      <slug> [--role pm] [--mux tmux|psmux]   create session + launch first role in the window
+  spawn   <slug> <role> [--mux ...]               launch a role's Claude session + register it
+  where   <slug> [role]                           print the role -> session-id registry table
+  resume  <slug> <role> [--send]                  print (or send-keys, no Enter) the /resume line
+  roles                                           list the canonical role codes
+
+Model (memsys 3c5900e5): ONE window per project; each role is a resumable Claude
+session; the human switches roles by /resume <session-id>; the registry maps
+role -> session-id. The human always presses Enter (routing config 08b19eee).
+
+Wire PMO_MCP_CLI to your memsys MCP CLI so the registry is the canonical memsys
+memory; without it, a local ~/.pmo cache is used (demo fallback).
+"""
+from __future__ import annotations
+import argparse
+import sys
+
+import pmo_mux as M
+
+
+def _session(slug: str) -> str:
+    return f"pmo-{slug}"
+
+
+def cmd_up(args):
+    mux = M.pick_mux(args.mux)
+    session = _session(args.slug)
+    if mux.has_session(session):
+        print(f"[pmo] session '{session}' exists ({mux.name}); attaching.")
+        mux.attach(session)
+        return
+    role = args.role
+    start = M.claude_start_cmd(role, args.slug)
+    mux.new_session(session, start)
+    print(f"[pmo] created '{session}' on {mux.name}, launched {role} in the single window.")
+    print(f"[pmo] after Claude reports its session-id, register it:")
+    print(f"        pmo spawn {args.slug} {role}   # or: pmo register-id {args.slug} {role} <id>")
+    print(f"[pmo] attaching…")
+    mux.attach(session)
+
+
+def cmd_spawn(args):
+    """Launch a role's session in the window and register it. In v1 the human
+    reads the session-id Claude prints and we record it; --id short-circuits that."""
+    reg = M.Registry.load(args.slug)
+    if args.id:
+        # pure registration: no multiplexer needed.
+        reg.set_role(args.role, args.id)
+        print(f"[pmo] registered {args.role} -> {args.id}")
+        return
+    mux = M.pick_mux(args.mux)
+    session = _session(args.slug)
+    start = M.claude_start_cmd(args.role, args.slug)
+    if args.window:
+        # launch the role into its OWN window in the session; it self-registers
+        # via the SessionStart hook (env PMO_ROLE/PMO_PROJECT_SLUG are set in start).
+        if not mux.has_session(session):
+            mux.new_session(session, start)
+            print(f"[pmo] created '{session}', launched {args.role} in its window.")
+        else:
+            mux.new_window(session, args.role, start)
+            print(f"[pmo] spawned {args.role} into its own window in '{session}'.")
+        print(f"[pmo] {args.role} self-registers on startup (SessionStart hook).")
+        return
+    # default: launch in the current window (one-window model)
+    if not mux.has_session(session):
+        mux.new_session(session, start)
+        print(f"[pmo] created '{session}' and launched {args.role}.")
+    else:
+        mux.send_keys(session, start, enter=True)
+        print(f"[pmo] launched {args.role} in '{session}'.")
+    print(f"[pmo] {args.role} self-registers on startup (SessionStart hook); or:")
+    print(f"        pmo spawn {args.slug} {args.role} --id <session-id>")
+
+
+def cmd_where(args):
+    reg = M.Registry.load(args.slug)
+    if args.role:
+        sid = reg.get_session_id(args.role)
+        print(sid or f"[pmo] no session registered for role '{args.role}'")
+        return
+    if not reg.rows:
+        print(f"[pmo] registry empty for '{args.slug}'")
+        return
+    print(f"{'role':<10} {'session-id':<40} registered_at")
+    for role, row in reg.rows.items():
+        print(f"{role:<10} {row['claude_session_id']:<40} {row.get('registered_at','')}")
+
+
+def cmd_resume(args):
+    """Print the /resume line for a role; with --send, send-keys it into the
+    window WITHOUT Enter (the human presses Enter — routing config 08b19eee)."""
+    reg = M.Registry.load(args.slug)
+    sid = reg.get_session_id(args.role)
+    if not sid:
+        print(f"[pmo] no session-id for '{args.role}' — spawn/register it first", file=sys.stderr)
+        sys.exit(1)
+    line = f"/resume {sid}"
+    if args.send:
+        mux = M.pick_mux(args.mux)
+        mux.send_keys(_session(args.slug), line, enter=False)  # NO Enter — human confirms
+        print(f"[pmo] pre-filled into window (press Enter to switch to {args.role}): {line}")
+    else:
+        print(line)
+
+
+def cmd_init(args):
+    """Scaffold the local-window side of a new project and print kickoff steps.
+    The memsys scaffold (manifest + registry memory) is created by the INIT PROMPT
+    pasted into the PM session (slug pmo-init-bootstrap-prompt) — that session has
+    memsys access; this CLI only sets up the local window + registry cache."""
+    slug = args.slug
+    reg = M.Registry.load(slug)          # creates/loads the local registry cache
+    reg._save()                          # ensure the cache file exists
+    print(f"[pmo] initialized local scaffold for project '{slug}'.")
+    print(f"[pmo] session: pmo-{slug}   registry: {reg.slug}")
+    print()
+    print("KICKOFF — next steps:")
+    print(f"  1. pmo up {slug} --role pm           # open the window, launch a PM session")
+    print(f"  2. In that PM session, paste the INIT PROMPT (memsys slug")
+    print(f"     'pmo-init-bootstrap-prompt', or the local pmo-init-prompt.txt).")
+    print(f"     It creates the memsys manifest + registry and becomes your PM.")
+    print(f"  3. pmo spawn {slug} pm --id <session-id>   # register the PM session")
+    print(f"  4. Talk to the PM about your project. It hands off with @pmo /resume <id>;")
+    print(f"     spawn PA / a domain (DO+DA+developer) as it calls for them.")
+    print()
+    print("Ensure the Stop hook (pmo-stop-hook.sh) is installed in Claude Code so")
+    print("@pmo /resume <id> hand-offs switch the window automatically.")
+
+
+def cmd_roles(args):
+    print(" ".join(M.ROLES))
+
+
+def main():
+    p = argparse.ArgumentParser(prog="pmo", description="PMO Area E one-window substrate")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    pu = sub.add_parser("up"); pu.add_argument("slug"); pu.add_argument("--role", default="pm")
+    pu.add_argument("--mux", choices=["tmux", "psmux"]); pu.set_defaults(fn=cmd_up)
+
+    ps = sub.add_parser("spawn"); ps.add_argument("slug"); ps.add_argument("role")
+    ps.add_argument("--id", help="register this session-id directly (skip launch)")
+    ps.add_argument("--window", action="store_true", help="launch into its own window (vs current)")
+    ps.add_argument("--mux", choices=["tmux", "psmux"]); ps.set_defaults(fn=cmd_spawn)
+
+    pw = sub.add_parser("where"); pw.add_argument("slug"); pw.add_argument("role", nargs="?")
+    pw.set_defaults(fn=cmd_where)
+
+    pr = sub.add_parser("resume"); pr.add_argument("slug"); pr.add_argument("role")
+    pr.add_argument("--send", action="store_true", help="send-keys into the window (no Enter)")
+    pr.add_argument("--mux", choices=["tmux", "psmux"]); pr.set_defaults(fn=cmd_resume)
+
+    pi = sub.add_parser("init"); pi.add_argument("slug"); pi.set_defaults(fn=cmd_init)
+
+    sub.add_parser("roles").set_defaults(fn=cmd_roles)
+
+    args = p.parse_args()
+    args.fn(args)
+
+
+if __name__ == "__main__":
+    main()

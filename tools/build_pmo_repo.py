@@ -40,7 +40,6 @@ EXTRACTED_ON = date.today().isoformat()
 
 # Generated section directories (wiped + rebuilt each run).
 SECTIONS = [
-    "prompts",
     "roles",
     "config",
     "architecture",
@@ -49,10 +48,9 @@ SECTIONS = [
 
 # Curated placement + clean filename for the durable knowledge-base artifacts.
 # Everything not listed here is routed by tag rules (see classify()).
+# NOTE: orchestrator-init and orchestrator-megaprompt are intentionally dropped —
+# the bootstrap/ package replaces them. See bootstrap/README.md.
 OVERRIDES: dict[str, tuple[str, str]] = {
-    # Kickoff prompts
-    "19f45258-d615-44d7-b3e3-b11648a787b0": ("prompts", "orchestrator-init"),
-    "8702533e-9546-4e7f-8891-7ccf8994a913": ("prompts", "orchestrator-megaprompt-pointer"),
     # Six role-prompts (v3)
     "127793ef-09a9-45d7-93da-a149165292ab": ("roles", "pm"),
     "897c696d-2d62-4c6a-8064-8327cf07cfbc": ("roles", "pa"),
@@ -82,7 +80,6 @@ OVERRIDES: dict[str, tuple[str, str]] = {
 EXAMPLE_TAGS = {"demo-seed", "pmo-seed", "pmo-spine-edge", "pmo-project-testing"}
 
 SECTION_BLURB = {
-    "prompts": "Operator-facing kickoff prompts — paste these into a fresh session.",
     "roles": "The six PMO role-prompts (templates for the generic engine).",
     "config": "Runtime configuration the orchestrator engine dispatches on.",
     "architecture": "Durable design decisions: manifest, substrate, routing.",
