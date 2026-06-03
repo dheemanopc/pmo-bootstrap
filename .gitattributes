@@ -1,0 +1,17 @@
+# Force LF for files that are executed by Linux tools (bash, python).
+# Without this, a Windows checkout with core.autocrlf=true rewrites them to
+# CRLF and the shebang line breaks at runtime.
+
+*.sh         text eol=lf
+*.py         text eol=lf
+*.json       text eol=lf
+*.yml        text eol=lf
+*.yaml       text eol=lf
+*.toml       text eol=lf
+*.md         text eol=lf
+
+# Binary — never normalize
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
